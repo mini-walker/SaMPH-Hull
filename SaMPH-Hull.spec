@@ -28,7 +28,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='SaMPH',
+    name='SaMPH-Hull',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -256,8 +256,6 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 **Affiliation**: Memorial University of Newfoundland  
 **Contact**: sjin@mun.ca
 
-This software was developed as part of research in high-speed marine vessel hydrodynamics at Memorial University of Newfoundland. The implementation is based on publicly available research and validated against published experimental data.
-
 ---
 
 <p align="center">

@@ -35,7 +35,7 @@ pyinstaller ^
   --clean ^
   --onefile ^
   --windowed ^
-  --name "SaMPH" ^
+  --name "SaMPH-Hull" ^
   --workpath "EXE/build" ^
   --distpath "EXE/dist" ^
   --paths "src" ^
