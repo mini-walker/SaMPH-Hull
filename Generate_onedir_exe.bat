@@ -20,7 +20,7 @@ pyinstaller ^
   --clean ^
   --onedir ^
   --windowed ^
-  --name "SaMPH" ^
+  --name "SaMPH-Hull" ^
   --contents-directory "SaMPH_Internal" ^
   --workpath "EXE/build" ^
   --distpath "EXE/dist" ^
