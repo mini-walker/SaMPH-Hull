@@ -17,10 +17,11 @@ from PySide6.QtWidgets import (
     QFileDialog, QDialog, QHBoxLayout, QVBoxLayout, QTreeWidget, QTreeWidgetItem,
     QStackedWidget, QDialogButtonBox, QLineEdit, QLabel, QComboBox, QCheckBox, 
     QMessageBox, QPushButton, QWidget, QGroupBox, QFormLayout, QSlider, QTextEdit,
-    QRadioButton, QButtonGroup, QScrollArea, QSpinBox
+    QRadioButton, QButtonGroup, QScrollArea, QSpinBox, QSizePolicy,
+    QStyledItemDelegate, QStyleOptionViewItem, QStyle
 )
-from PySide6.QtCore import Qt, Signal, QSettings
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt, Signal, QSettings, QRect, QPoint, QEvent
+from PySide6.QtGui import QFont, QIcon, QColor, QPalette
 #-----------------------------------------------------------------------------------------
 
 #-----------------------------------------------------------------------------------------
@@ -52,6 +53,8 @@ class Setting_Window(QDialog):
     theme_changed = Signal(str)
     font_changed = Signal(str, int)
     ai_settings_changed = Signal()
+    connection_test_signal = Signal(bool, str)  # (success, message)
+    models_changed_signal = Signal(list, str)   # (models_list, selected_model)
 
 
     #-------------------------------------------------------------------------------------
@@ -69,6 +72,10 @@ class Setting_Window(QDialog):
         setting_file_path = usr_folder / "Settings/settings.ini"
         self.settings = QSettings(str(setting_file_path), QSettings.Format.IniFormat)
         #---------------------------------------------------------------------------------
+
+        # Provider cache
+        self.account_providers = []
+        self.custom_account_provider = None
 
         #---------------------------------------------------------------------------------
         # Main Layout
@@ -214,26 +221,33 @@ class Setting_Window(QDialog):
         self.provider_combo.currentTextChanged.connect(self.on_provider_changed)
         self.controls["AI"]["provider"] = self.provider_combo
 
-        # 2. Model Selection - Load from account.json
+        # 2. Model Selection - populated dynamically from account.json
         self.lbl_model = QLabel("Model:")
-        model_input = QComboBox()
-        model_input.setEditable(True)
         
-        # Load available models from account.json
-        available_models = self.load_available_models()
-        if available_models:
-            model_input.addItems(available_models)
-        else:
-            # Fallback if file doesn't exist or is empty
-            model_input.addItem("No models configured")
+        model_container = QWidget()
+        model_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        model_layout = QHBoxLayout(model_container)
+        model_layout.setContentsMargins(0, 0, 0, 0)
+        model_layout.setSpacing(5)
         
-        saved_model = self.settings.value("AI/model", "")
-        if saved_model and saved_model in available_models:
-            model_input.setCurrentText(saved_model)
-        elif available_models:
-            model_input.setCurrentIndex(0)
+        self.models_combo = QComboBox()
+        self.models_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.models_delegate = _ModelDeleteDelegate(self.models_combo.view(), delete_callback=self.delete_model_callback)
+        self.models_combo.view().setItemDelegate(self.models_delegate)
+        self.models_combo.view().setMouseTracking(True)
+        self.models_combo.view().viewport().installEventFilter(self)
         
-        self.controls["AI"]["model"] = model_input
+        self.btn_add_model = QPushButton()
+        self.btn_add_model.setIcon(QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-plus-math-100.png")))
+        self.btn_add_model.setObjectName("Add_Custom_Model_Button")
+        self.btn_add_model.setFixedSize(34, 34)
+        self.btn_add_model.setToolTip("Add Custom Model")
+        self.btn_add_model.clicked.connect(self.add_custom_model_dialog)
+        
+        model_layout.addWidget(self.models_combo, 1)
+        model_layout.addWidget(self.btn_add_model)
+        
+        self.controls["AI"]["model"] = self.models_combo
 
         # 3. Base URL
         self.lbl_base_url = QLabel("Base URL:")
@@ -245,21 +259,60 @@ class Setting_Window(QDialog):
 
         # 4. API Key
         self.lbl_api_key = QLabel("API Key:")
+        
+        api_key_container = QWidget()
+        api_key_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        api_key_layout = QHBoxLayout(api_key_container)
+        api_key_layout.setContentsMargins(0, 0, 0, 0)
+        api_key_layout.setSpacing(5)
+        
         api_input = QLineEdit()
+        api_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         api_input.setEchoMode(QLineEdit.EchoMode.Password)
         api_input.setPlaceholderText("sk-...")
         api_input.setText(self.settings.value("AI/api_key", ""))
         self.controls["AI"]["api_key"] = api_input
+        
+        self.btn_toggle_key = QPushButton()
+        self.btn_toggle_key.setIcon(QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-blind-100.png")))
+        self.btn_toggle_key.setObjectName("Show_API_Key_Button")
+        self.btn_toggle_key.setFixedSize(34, 34)
+        self.btn_toggle_key.setToolTip("Show/Hide API Key")
+        self.btn_toggle_key.clicked.connect(self.toggle_api_key_visibility)
 
-        # 5. Test Connection Button
-        self.btn_test_connection = QPushButton("Test Connection")
-        self.btn_test_connection.clicked.connect(self.test_ai_connection)
+
+
+        api_key_layout.addWidget(api_input, 1)
+        api_key_layout.addWidget(self.btn_toggle_key)
+
+        # 5. Test Connection Button - 横向布局
+        test_connection_container = QWidget()
+        test_connection_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        test_connection_layout = QHBoxLayout(test_connection_container)
+        test_connection_layout.setContentsMargins(0, 0, 0, 0)
+        test_connection_layout.setSpacing(5)
+        
+        self.btn_test_connection = QPushButton()
+        self.btn_test_connection.setIcon(QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-rdp-connection-100.png")))
+        self.btn_test_connection.setObjectName("Test_API_Connection_Button")
+        self.btn_test_connection.setFixedSize(34, 34)
+        self.btn_test_connection.setToolTip("Test API Connection")
+        self.btn_test_connection.clicked.connect(self.on_test_connection_clicked)
+        self.controls["AI"]["test_connection_btn"] = self.btn_test_connection
+        
+        self.lbl_connection_status = QLabel("")
+        self.lbl_connection_status.setStyleSheet("color: gray; font-size: 13px;")
+        
+        test_connection_layout.addStretch()
+        test_connection_layout.addWidget(self.lbl_connection_status)
+        test_connection_layout.addSpacing(10)
+        test_connection_layout.addWidget(self.btn_test_connection)
 
         api_layout.addRow(self.lbl_provider, self.provider_combo)
-        api_layout.addRow(self.lbl_model, model_input)
         api_layout.addRow(self.lbl_base_url, base_url_input)
-        api_layout.addRow(self.lbl_api_key, api_input)
-        api_layout.addRow("", self.btn_test_connection)
+        api_layout.addRow(self.lbl_model, model_container)
+        api_layout.addRow(self.lbl_api_key, api_key_container)
+        api_layout.addRow("", test_connection_container)
         self.group_ai_api.setLayout(api_layout)
         layout.addWidget(self.group_ai_api)
 
@@ -309,11 +362,10 @@ class Setting_Window(QDialog):
         return page
 
     def on_provider_changed(self, provider_name):
-        """Map providers to their OpenAI-Compatible Endpoint URLs."""
-        # Safety check: base_url control might not exist yet during initialization
-        if not hasattr(self, 'controls') or "AI" not in self.controls or "base_url" not in self.controls["AI"]:
-            return
-            
+        """Handle provider change: update base URL, API key and models list."""
+        matched_provider = self._account_provider_for_display(provider_name)
+        
+        # Standard URL map - always used as the correct default
         url_map = {
             "OpenRouter (Recommended)": "https://openrouter.ai/api/v1/chat/completions",
             "OpenAI (Official)": "https://api.openai.com/v1/chat/completions",
@@ -326,108 +378,387 @@ class Setting_Window(QDialog):
             "Ollama (Localhost)": "http://localhost:11434/v1/chat/completions",
             "Arli": "https://api.arliai.com/v1/chat/completions"
         }
+        
+        # Set base_url from standard map (always correct for known providers)
         if provider_name in url_map:
             self.controls["AI"]["base_url"].setText(url_map[provider_name])
+        elif self._is_custom_provider_display(provider_name):
+            # For Custom, use account.json or clear
+            if matched_provider:
+                self.controls["AI"]["base_url"].setText(matched_provider.get("base_url", ""))
+            else:
+                self.controls["AI"]["base_url"].clear()
+        
+        # Set API key from account.json if available
+        if matched_provider and "api_key" in self.controls["AI"]:
+            self.controls["AI"]["api_key"].setText(matched_provider.get("API-Key", ""))
+        
+        if matched_provider:
+            # Populate models from account.json
+            self._populate_models_for_provider(provider_name)
+            saved_model = self.settings.value("AI/model", "")
+            if saved_model:
+                idx = self.controls["AI"]["model"].findText(saved_model)
+                if idx != -1:
+                    self.controls["AI"]["model"].setCurrentIndex(idx)
+            print(f"[INFO] Settings Page: loaded config for matched provider '{provider_name}' from account.json")
+        else:
+            self.controls["AI"]["model"].clear()
+        
+        # IMPORTANT: Save base_url and api_key to settings.ini BEFORE emitting models_changed_signal.
+        # This ensures that when update_model_for_chat_controller reads from settings.ini,
+        # it gets the NEW provider's values, not the OLD provider's stale values.
+        self.settings.setValue("AI/base_url", self.controls["AI"]["base_url"].text().strip())
+        self.settings.setValue("AI/api_key", self.controls["AI"]["api_key"].text().strip())
+        self.settings.sync()
+        print(f"[INFO] on_provider_changed: saved new base_url/api_key to settings.ini for '{provider_name}'")
+        
+        self._emit_models_changed()
 
-    def load_available_models(self):
-        """
-        Load AI configuration from usr/SaMPH/Settings/account.json file.
-        Populates provider, base_url, api_key, and returns models list.
-        """
+    # -------------------------------------------------------------------------
+    # Provider helper methods (ported from AIchat_Combo)
+    # -------------------------------------------------------------------------
+    def _provider_name(self, provider):
+        if not isinstance(provider, dict):
+            return ""
+        return str(provider.get("Provider") or provider.get("provider") or "").lower().strip()
+
+    def _provider_matches_display(self, provider_name, display_text):
+        provider = str(provider_name or "").lower().strip()
+        display = str(display_text or "").lower().strip()
+        return bool(provider and display and (provider in display or display in provider))
+
+    def _is_custom_provider_display(self, display_text):
+        return str(display_text or "").lower().strip() == "custom"
+
+    def _find_custom_account_provider(self):
+        explicit_custom = None
+        known_items = [
+            self.provider_combo.itemText(i)
+            for i in range(self.provider_combo.count())
+            if self.provider_combo.itemText(i).lower().strip() != "custom"
+        ]
+        for provider in self.account_providers:
+            provider_name = self._provider_name(provider)
+            if provider_name == "custom":
+                explicit_custom = provider
+                break
+            if provider_name and not any(self._provider_matches_display(provider_name, item) for item in known_items):
+                if explicit_custom is None:
+                    explicit_custom = provider
+        return explicit_custom
+
+    def _account_provider_for_display(self, display_text):
+        if self._is_custom_provider_display(display_text):
+            if self.custom_account_provider is None:
+                self.custom_account_provider = self._find_custom_account_provider()
+            return self.custom_account_provider
+        for provider in self.account_providers:
+            provider_name = provider.get("Provider") or provider.get("provider") or ""
+            if self._provider_matches_display(provider_name, display_text):
+                return provider
+        return None
+
+    def _provider_combo_index_for_account_provider(self, provider_name):
+        for i in range(self.provider_combo.count()):
+            item_text = self.provider_combo.itemText(i)
+            if item_text.lower().strip() == "custom":
+                continue
+            if self._provider_matches_display(provider_name, item_text):
+                return i
+        return self.provider_combo.findText("Custom") if self.custom_account_provider else -1
+
+    def _account_provider_name_for_display(self, display_text):
+        matched_provider = self._account_provider_for_display(display_text)
+        if matched_provider:
+            return (matched_provider.get("Provider") or matched_provider.get("provider") or "").lower().strip()
+        if self._is_custom_provider_display(display_text):
+            return "custom"
+        return str(display_text or "").lower().strip()
+
+    def _populate_models_for_provider(self, provider_name):
+        """Load model list for the given provider from account.json and populate the combo."""
+        self.controls["AI"]["model"].blockSignals(True)
+        self.controls["AI"]["model"].clear()
+        matched = self._account_provider_for_display(provider_name)
+        if matched:
+            models = matched.get("models", [])
+            for m in models:
+                self.controls["AI"]["model"].addItem(m)
+        self.controls["AI"]["model"].blockSignals(False)
+
+    def _current_models(self):
+        model_combo = self.controls["AI"]["model"]
+        return [model_combo.itemText(i) for i in range(model_combo.count())]
+
+    def _emit_models_changed(self):
+        self.models_changed_signal.emit(self._current_models(), self.controls["AI"]["model"].currentText())
+
+    def add_custom_model_dialog(self):
+        """Show dialog to add a custom model name for the current provider."""
+        from PySide6.QtWidgets import QInputDialog
+        provider_name = self.provider_combo.currentText()
+        
+        model_name, ok = QInputDialog.getText(
+            self, "Add Custom Model", f"Enter custom model name for {provider_name}:"
+        )
+        if ok and model_name.strip():
+            model_name = model_name.strip()
+            if self.models_combo.findText(model_name) != -1:
+                QMessageBox.warning(self, "Warning", "This model name already exists!")
+                return
+            self.models_combo.addItem(model_name)
+            self.models_combo.setCurrentText(model_name)
+            self.save_new_model_to_account_json(provider_name, model_name)
+            self._emit_models_changed()
+            QMessageBox.information(self, "Success", f"Model '{model_name}' has been added successfully!")
+
+    def save_new_model_to_account_json(self, provider_name, new_model):
+        """Save the new model back to account.json for the matching provider."""
+        import json
+        usr_folder = utils.get_global_usr_dir()
+        account_file = usr_folder / "Settings/account.json"
+        if not account_file.exists():
+            return
         try:
-            usr_folder = utils.get_global_usr_dir()
-            account_file = usr_folder / "Settings/account.json"
-            
-            if not account_file.exists():
-                print("[INFO] account.json not found, using defaults")
-                return []
-            
-            with open(account_file, 'r', encoding='utf-8') as f:
-                account_data = json.load(f)
-            
-            # Load provider if available
-            provider = account_data.get("Provider", "")
-            if provider and hasattr(self, 'controls') and "AI" in self.controls:
-                if "provider" in self.controls["AI"]:
-                    # Map internal provider names to display names
-                    provider_map = {
-                        "openrouter": "OpenRouter (Recommended)",
-                        "openai": "OpenAI (Official)",
-                        "qwen": "Alibaba Qwen (DashScope)",
-                        "deepseek": "DeepSeek (Official)",
-                        "xai": "X.AI (Grok)",
-                        "x.ai": "X.AI (Grok)",
-                        "groq": "Groq (Meta Llama/Mixtral)",
-                        "gemini": "Google Gemini (via OpenRouter)",
-                        "siliconflow": "SiliconFlow (硅基流动)",
-                        "ollama": "Ollama (Localhost)",
-                        "arli": "Arli"
-                    }
-                    display_name = provider_map.get(provider.lower(), "Custom")
-                    self.controls["AI"]["provider"].setCurrentText(display_name)
-                    print(f"[INFO] Loaded provider: {display_name}")
-            
-            # Load base_url if available
-            base_url = account_data.get("base_url", "")
-            if base_url and hasattr(self, 'controls') and "AI" in self.controls:
-                if "base_url" in self.controls["AI"]:
-                    self.controls["AI"]["base_url"].setText(base_url)
-                    print(f"[INFO] Loaded base_url: {base_url}")
-            
-            # Load api_key if available
-            api_key = account_data.get("API-Key", "")
-            if api_key and hasattr(self, 'controls') and "AI" in self.controls:
-                if "api_key" in self.controls["AI"]:
-                    self.controls["AI"]["api_key"].setText(api_key)
-                    print(f"[INFO] Loaded api_key: {'*' * min(8, len(api_key))}")
-            
-            # Get models list from the JSON file
-            models = account_data.get("models", [])
-            if models:
-                print(f"[INFO] Loaded {len(models)} models from account.json")
-            return models if isinstance(models, list) else []
-            
+            with open(account_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
         except Exception as e:
-            print(f"[WARN] Failed to load AI configuration from account.json: {e}")
+            return
+
+        updated = False
+        provider_name_lower = str(provider_name or "").lower().strip()
+        target_map = {
+            "OpenRouter (Recommended)": "OpenRouter", "OpenAI (Official)": "OpenAI",
+            "Alibaba Qwen (DashScope)": "Qwen", "DeepSeek (Official)": "DeepSeek",
+            "X.AI (Grok)": "X.AI", "Groq (Meta Llama/Mixtral)": "Groq",
+            "Google Gemini (via OpenRouter)": "Gemini", "SiliconFlow (硅基流动)": "SiliconFlow",
+            "Ollama (Localhost)": "Ollama", "Arli": "Arli",
+        }
+        target_name = target_map.get(provider_name, "Custom")
+        target_lower = target_name.lower().strip()
+
+        def update_item(item):
+            nonlocal updated
+            prov = str(item.get("Provider") or item.get("provider") or "").lower().strip()
+            if prov and (prov == target_lower or target_lower in prov or prov in target_lower):
+                if "models" not in item:
+                    item["models"] = []
+                if new_model not in item["models"]:
+                    item["models"].append(new_model)
+                    updated = True
+
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    update_item(item)
+                    if updated:
+                        break
+
+        if updated:
+            try:
+                with open(account_file, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                print(f"[INFO] Added model '{new_model}' for provider '{provider_name}' in account.json")
+                self._set_account_provider_cache(data)
+            except Exception as e:
+                print(f"[ERROR] Failed to save account.json with new model: {e}")
+
+    def toggle_api_key_visibility(self):
+        """Toggle API key visibility."""
+        api_input = self.controls["AI"]["api_key"]
+        if api_input.echoMode() == QLineEdit.EchoMode.Password:
+            api_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.btn_toggle_key.setIcon(QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-eye-100.png")))
+        else:
+            api_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.btn_toggle_key.setIcon(QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-blind-100.png")))
+            
+    def _set_account_provider_cache(self, data):
+        if isinstance(data, list):
+            self.account_providers = [item for item in data if isinstance(item, dict)]
+        elif isinstance(data, dict):
+            if "Provider" in data or "provider" in data:
+                self.account_providers = [data]
+            else:
+                providers = []
+                for key, val in data.items():
+                    if isinstance(val, dict):
+                        item = val.copy()
+                        if "Provider" not in item and "provider" not in item:
+                            item["Provider"] = key
+                        providers.append(item)
+                self.account_providers = providers
+        else:
+            self.account_providers = []
+        self.custom_account_provider = self._find_custom_account_provider()
+
+    def load_all_AI_configs(self, config_path):
+        """Load all provider configurations from account.json."""
+        import json
+        if not os.path.exists(config_path):
+            return []
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            print(f"[ERROR] Failed to load account file: {e}")
             return []
 
+        providers = []
+        def parse_single(item):
+            if not isinstance(item, dict):
+                return None
+            prov = item.get("Provider") or item.get("provider")
+            base = item.get("base_url") or item.get("baseUrl")
+            key = item.get("API-Key") or item.get("api_key") or item.get("apiKey")
+            models = item.get("models")
+            if prov and models is not None:
+                if isinstance(models, list):
+                    model_list = list(models)
+                elif isinstance(models, (tuple, set)):
+                    model_list = list(models)
+                else:
+                    model_list = [str(models)]
+                return {
+                    "Provider": str(prov),
+                    "base_url": str(base or ""),
+                    "API-Key": str(key or ""),
+                    "models": model_list
+                }
+            return None
 
-    def test_ai_connection(self):
-        """Test the AI API connection."""
+        if isinstance(data, list):
+            for item in data:
+                parsed = parse_single(item)
+                if parsed:
+                    providers.append(parsed)
+        elif isinstance(data, dict):
+            parsed = parse_single(data)
+            if parsed:
+                providers.append(parsed)
+            else:
+                for key, val in data.items():
+                    if isinstance(val, dict):
+                        item = val.copy()
+                        if "Provider" not in item and "provider" not in item:
+                            item["Provider"] = key
+                        parsed = parse_single(item)
+                        if parsed:
+                            providers.append(parsed)
+        return providers
+
+    def update_provider_states(self, providers):
+        """Enable/disable provider combobox items based on account.json definition."""
+        self.account_providers = providers
+        self.custom_account_provider = self._find_custom_account_provider()
+        
+        enabled_color = QColor("#333333")
+        disabled_color = QColor("#9ca3af")
+
+        model = self.provider_combo.model()
+        for i in range(self.provider_combo.count()):
+            item_text = self.provider_combo.itemText(i)
+            is_custom = self._is_custom_provider_display(item_text)
+            is_enabled = is_custom or self._account_provider_for_display(item_text) is not None
+            
+            item = model.item(i, 0)
+            if item:
+                item.setEnabled(is_enabled)
+                item.setData(enabled_color if is_enabled else disabled_color, Qt.ForegroundRole)
+                item.setData(is_enabled, Qt.UserRole)  # Store enabled state for delegate
+                item.setToolTip("" if is_enabled else "Not configured in account.json")
+        
+        # Use a custom delegate to ensure disabled items appear gray even with global QSS
+        delegate = _ProviderItemDelegate(self.provider_combo.view())
+        self.provider_combo.view().setItemDelegate(delegate)
+        self.provider_combo.view().viewport().update()
+
+        if providers:
+            first_provider_name = providers[0].get("Provider") or providers[0].get("provider") or ""
+            default_index = self._provider_combo_index_for_account_provider(first_provider_name)
+            if default_index != -1:
+                self.provider_combo.setCurrentIndex(default_index)
+
+        self.on_provider_changed(self.provider_combo.currentText())
+
+
+    def on_test_connection_clicked(self):
+        """Handle test connection button click (threaded, non-blocking)."""
+        from threading import Thread
+        
         api_key = self.controls["AI"]["api_key"].text().strip()
         base_url = self.controls["AI"]["base_url"].text().strip()
+        model = self.controls["AI"]["model"].currentText().strip()
         
-        if not api_key or not base_url:
-            QMessageBox.warning(self, "Missing Information", "Please provide both API Key and Base URL.")
+        if not api_key:
+            self.update_connection_status(False, "❌ API Key is required")
+            return
+        if not base_url:
+            self.update_connection_status(False, "❌ Base URL is required")
+            return
+        if not model:
+            self.update_connection_status(False, "❌ Model is required")
             return
         
         self.btn_test_connection.setEnabled(False)
-        self.btn_test_connection.setText("Testing...")
+        self.update_connection_status(None, "🔄 Testing connection...")
         
-        try:
-            # Simple test request
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            data = {
-                "model": self.controls["AI"]["model"].currentText(),
-                "messages": [{"role": "user", "content": "test"}],
-                "max_tokens": 5
-            }
-            
-            response = requests.post(base_url, headers=headers, json=data, timeout=10)
-            
-            if response.status_code == 200:
-                QMessageBox.information(self, "Success", "✓ Connection successful!")
-            else:
-                QMessageBox.warning(self, "Connection Failed", 
-                    f"Status Code: {response.status_code}\n{response.text[:200]}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Connection error:\n{str(e)}")
-        finally:
-            self.btn_test_connection.setEnabled(True)
-            self.btn_test_connection.setText("Test Connection")
+        def test_connection():
+            try:
+                response = requests.post(
+                    base_url,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": "test"}],
+                        "max_tokens": 10
+                    },
+                    timeout=10
+                )
+                
+                if response.status_code == 200:
+                    self.update_connection_status(True, "✅ Connection successful!")
+                    self.connection_test_signal.emit(True, "Connection successful")
+                else:
+                    error_msg = f"❌ Connection failed (HTTP {response.status_code})"
+                    try:
+                        error_data = response.json()
+                        if "error" in error_data:
+                            error_msg += f": {error_data['error'].get('message', 'Unknown error')}"
+                    except:
+                        pass
+                    self.update_connection_status(False, error_msg)
+                    self.connection_test_signal.emit(False, error_msg)
+            except requests.exceptions.Timeout:
+                self.update_connection_status(False, "❌ Connection timeout")
+                self.connection_test_signal.emit(False, "Connection timeout")
+            except requests.exceptions.ConnectionError:
+                self.update_connection_status(False, "❌ Connection error - Check URL and network")
+                self.connection_test_signal.emit(False, "Connection error")
+            except Exception as e:
+                error_msg = f"❌ Error: {str(e)}"
+                self.update_connection_status(False, error_msg)
+                self.connection_test_signal.emit(False, str(e))
+            finally:
+                self.btn_test_connection.setEnabled(True)
+        
+        thread = Thread(target=test_connection, daemon=True)
+        thread.start()
+    
+    def update_connection_status(self, success, message):
+        """Update the connection status label."""
+        self.lbl_connection_status.setText(message)
+        
+        if success is True:
+            self.lbl_connection_status.setStyleSheet("color: #00aa00; font-size: 13px; font-weight: bold;")
+        elif success is False:
+            self.lbl_connection_status.setStyleSheet("color: #ff4444; font-size: 13px; font-weight: bold;")
+        else:
+            self.lbl_connection_status.setStyleSheet("color: #0099ff; font-size: 13px; font-weight: bold;")
     #-------------------------------------------------------------------------------------
 
     #-------------------------------------------------------------------------------------
@@ -1001,24 +1332,165 @@ class Setting_Window(QDialog):
 
         """Refreshes all text based on the current language."""
         if not lang_manager: return
+        t = lang_manager.get_text
         
-        self.setWindowTitle(lang_manager.get_text("Preferences"))
-        self.item_ai.setText(0, lang_manager.get_text("AI Configuration"))
-        self.item_appearance.setText(0, lang_manager.get_text("Appearance"))
-        self.item_font.setText(0, lang_manager.get_text("Font Settings"))
-        self.item_language.setText(0, lang_manager.get_text("Language Settings"))
-        self.item_search.setText(0, lang_manager.get_text("Search"))
-        self.item_result_chart.setText(0, lang_manager.get_text("Result Chart"))
+        self.setWindowTitle(t("Preferences"))
+        self.item_ai.setText(0, t("AI Configuration"))
+        self.item_appearance.setText(0, t("Appearance"))
+        self.item_font.setText(0, t("Font Settings"))
+        self.item_language.setText(0, t("Language Settings"))
+        self.item_search.setText(0, t("Search"))
+        self.item_result_chart.setText(0, t("Result Chart"))
 
-        self.button_box.button(QDialogButtonBox.Ok).setText(lang_manager.get_text("Save"))
-        self.button_box.button(QDialogButtonBox.Apply).setText(lang_manager.get_text("Apply"))
-        self.button_box.button(QDialogButtonBox.Cancel).setText(lang_manager.get_text("Cancel"))
+        self.button_box.button(QDialogButtonBox.Ok).setText(t("Save"))
+        self.button_box.button(QDialogButtonBox.Apply).setText(t("Apply"))
+        self.button_box.button(QDialogButtonBox.Cancel).setText(t("Cancel"))
+
+        # AI Connection group
+        self.group_ai_api.setTitle(t("API Connection"))
+        self.lbl_provider.setText(t("Provider:"))
+        self.lbl_model.setText(t("Model:"))
+        self.lbl_base_url.setText(t("Base URL:"))
+        self.lbl_api_key.setText(t("API Key:"))
+        self.btn_add_model.setToolTip(t("Add Custom Model"))
+        self.btn_toggle_key.setToolTip(t("Show/Hide API Key"))
+        self.btn_test_connection.setToolTip(t("Test API Connection"))
+        base_url_input = self.controls["AI"]["base_url"]
+        base_url_input.setPlaceholderText("https://...")
+        api_key_input = self.controls["AI"]["api_key"]
+        api_key_input.setPlaceholderText("sk-...")
+        self.lbl_connection_status.setText("")
+
+        # Behavior group
+        self.group_ai_behavior.setTitle(t("Behavior"))
+        self.lbl_sys_prompt.setText(t("System Prompt:"))
+        self.lbl_temperature.setText(t("Temperature:"))
+        sys_prompt = self.controls["AI"]["system_prompt"]
+        sys_prompt.setPlaceholderText(t("You are a helpful assistant...") if lang_manager.current_language == "Chinese" else "You are a helpful assistant...")
+        self.btn_reset_ai.setText(t("Reset AI Settings"))
+
+        # Appearance
+        self.group_theme.setTitle(t("Theme & UI"))
+        self.lbl_theme_mode.setText(t("Theme mode:"))
+        self.chk_toolbar_icons.setText(t("Show toolbar icons"))
+        self.chk_animations.setText(t("Enable panel animations"))
+        self.group_panels.setTitle(t("Default Panel Sizes"))
+        self.lbl_left_width.setText(t("Left Panel Width:"))
+        self.lbl_right_width.setText(t("Right Panel Width:"))
+        self.group_bg.setTitle(t("Central Background"))
+        self.lbl_bg_instruction.setText(t("Select a custom background image (JPG, PNG, GIF):"))
+        self.btn_browse_bg.setText(t("Browse Image..."))
+        self.btn_clear_bg.setText(t("Clear / Reset"))
+
+        # Font
+        self.group_font.setTitle(t("Font Settings"))
+        self.lbl_font_type.setText(t("Font type:"))
+        self.lbl_font_size.setText(t("Font size:"))
+        self.lbl_font_preview.setText(t("Preview:"))
+
+        # Language
+        self.group_language.setTitle(t("Language Settings"))
+        self.lbl_lang_type.setText(t("Language type:"))
+
+        # Search
+        self.group_search.setTitle(t("Search Engine"))
+        self.lbl_search_engine.setText(t("Default search engine:"))
+
+        # Result Chart
+        self.group_result_chart.setTitle(t("Result Chart Settings"))
+        self.lbl_curve_style.setText(t("Curve Style:"))
+        self.lbl_curve_color.setText(t("Curve Color:"))
+        self.lbl_curve_width.setText(t("Curve Width:"))
+        self.lbl_scatter_style.setText(t("Scatter Style:"))
+        self.lbl_axis_style.setText(t("Axis Style:"))
+        self.lbl_grid_style.setText(t("Grid Style:"))
+        self.lbl_bg_color.setText(t("Background Color:"))
 
     #-------------------------------------------------------------------------------------
     # Getters for retrieving specific settings
     def get_api_key(self):
         return self.settings.value("AI/api_key", "", type=str)
 
+
+    def _model_delete_button_rect(self, item_rect):
+        btn_width = 24
+        btn_height = 20
+        return QRect(
+            item_rect.right() - btn_width - 5,
+            item_rect.top() + (item_rect.height() - btn_height) // 2,
+            btn_width, btn_height
+        )
+    def eventFilter(self, watched, event):
+        if watched == self.models_combo.view().viewport():
+            if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease):
+                pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                index = self.models_combo.view().indexAt(pos)
+                if index.isValid():
+                    item_rect = self.models_combo.view().visualRect(index)
+                    if self._model_delete_button_rect(item_rect).contains(pos):
+                        if event.type() == QEvent.Type.MouseButtonRelease:
+                            self.delete_model_callback(index.row())
+                        return True
+        return super().eventFilter(watched, event)
+    def delete_model_callback(self, row):
+        model_name = self.models_combo.itemText(row)
+        if not model_name:
+            return
+        provider_name = self.provider_combo.currentText()
+        confirm = QMessageBox.question(
+            self, "Delete Model",
+            f"Are you sure you want to delete the model '{model_name}' for provider '{provider_name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if confirm == QMessageBox.StandardButton.Yes:
+            self.remove_model_from_account_json(provider_name, model_name)
+            self.models_combo.removeItem(row)
+            self.models_combo.showPopup()
+            saved_model = self.settings.value("AI/model", "")
+            if saved_model == model_name:
+                self.settings.setValue("AI/model", self.models_combo.currentText())
+                self.settings.sync()
+            self._emit_models_changed()
+    def remove_model_from_account_json(self, provider_name, model_to_delete):
+        import json
+        usr_folder = utils.get_global_usr_dir()
+        account_file = usr_folder / "Settings/account.json"
+        if not account_file.exists():
+            return
+        try:
+            with open(account_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return
+        target_map = {"OpenRouter (Recommended)": "OpenRouter", "OpenAI (Official)": "OpenAI",
+            "Alibaba Qwen (DashScope)": "Qwen", "DeepSeek (Official)": "DeepSeek",
+            "X.AI (Grok)": "X.AI", "Groq (Meta Llama/Mixtral)": "Groq",
+            "Google Gemini (via OpenRouter)": "Gemini", "SiliconFlow (硅基流动)": "SiliconFlow",
+            "Ollama (Localhost)": "Ollama", "Arli": "Arli"}
+        target_lower = target_map.get(provider_name, "Custom").lower().strip()
+        updated = False
+        def update_item(item):
+            nonlocal updated
+            prov = str(item.get("Provider") or item.get("provider") or "").lower().strip()
+            if prov and (prov == target_lower or target_lower in prov or prov in target_lower):
+                if "models" in item and model_to_delete in item["models"]:
+                    item["models"].remove(model_to_delete)
+                    updated = True
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    update_item(item)
+                    if updated:
+                        break
+        if updated:
+            try:
+                with open(account_file, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                self._set_account_provider_cache(data)
+            except Exception as e:
+                print(f"[ERROR] Failed to save account.json after model deletion: {e}")
+#-----------------------------------------------------------------------------------------
     def get_base_url(self):
         return self.settings.value("AI/base_url", "", type=str)
 
@@ -1027,3 +1499,59 @@ class Setting_Window(QDialog):
 
     def get_model(self):
         return self.settings.value("AI/model", "gpt-4-turbo", type=str)
+#-----------------------------------------------------------------------------------------
+
+#-----------------------------------------------------------------------------------------
+class _ProviderItemDelegate(QStyledItemDelegate):
+    """Custom delegate that respects per-item enabled state colors regardless of global QSS."""
+    def paint(self, painter, option, index):
+        is_enabled = index.data(Qt.UserRole)
+        if is_enabled is not None and not is_enabled:
+            # Bypass QSS entirely: draw gray text + clear background directly
+            painter.save()
+            if option.state & QStyle.State_Selected:
+                painter.fillRect(option.rect, option.palette.highlight())
+            else:
+                painter.fillRect(option.rect, option.palette.base())
+            painter.setPen(QColor("#9ca3af"))
+            text = index.data(Qt.DisplayRole)
+            text_rect = option.rect.adjusted(8, 0, -8, 0)
+            painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, text if text else "")
+            painter.restore()
+        else:
+            super().paint(painter, option, index)
+
+
+class _ModelDeleteDelegate(QStyledItemDelegate):
+    """Delegate that paints a delete (×) button on each model item."""
+    def __init__(self, parent=None, delete_callback=None):
+        super().__init__(parent)
+        self.delete_callback = delete_callback
+
+    def paint(self, painter, option, index):
+        item_option = QStyleOptionViewItem(option)
+        item_option.rect = option.rect.adjusted(0, 0, -34, 0)
+        super().paint(painter, item_option, index)
+        painter.save()
+        rect = option.rect
+        btn_width = 16
+        btn_height = 16
+        btn_rect = QRect(rect.right() - btn_width - 5, rect.top() + (rect.height() - btn_height) // 2, btn_width, btn_height)
+        icon = QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-close-100.png"))
+        icon.paint(painter, btn_rect)
+        painter.restore()
+
+    def editorEvent(self, event, model, option, index):
+        if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease):
+            rect = option.rect
+            btn_width = 24
+            btn_height = 20
+            btn_rect = QRect(rect.right() - btn_width - 5, rect.top() + (rect.height() - btn_height) // 2, btn_width, btn_height)
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            if btn_rect.contains(pos):
+                if event.type() == QEvent.Type.MouseButtonRelease:
+                    if self.delete_callback:
+                        self.delete_callback(index.row())
+                return True
+        return super().editorEvent(event, model, option, index)
+

@@ -13,7 +13,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QToolButton,
     QTextEdit, QScrollArea, QFrame, QSizePolicy, QComboBox, QFileDialog,
-    QGraphicsDropShadowEffect, QAbstractItemView
+    QGraphicsDropShadowEffect, QAbstractItemView, QCheckBox
 )
 from PySide6.QtCore import Qt, QSize, Signal, QPropertyAnimation, QEvent, QDateTime, QTimer
 from PySide6.QtGui import QIcon, QTextImageFormat, QTextCursor, QColor
@@ -302,6 +302,44 @@ class Right_AIChat_Panel(QWidget):
         top_layout.addWidget(self.btn_history)
         top_layout.addWidget(self.btn_new_folder)
         top_layout.addWidget(self.btn_new_chat)
+
+        # Send History checkbox (default: unchecked = no history sent)
+        self.send_history_cb = QCheckBox("Send History")
+        self.send_history_cb.setChecked(False)
+        self.send_history_cb.setToolTip("Send previous conversation context to the AI")
+        self.send_history_cb.setStyleSheet("""
+            QCheckBox {
+                font-size: 11px;
+                color: #888;
+                spacing: 6px;
+                padding: 2px 6px;
+                border-radius: 4px;
+            }
+            QCheckBox:hover {
+                color: #333;
+                background-color: rgba(0, 0, 0, 0.04);
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 1.5px solid #bbb;
+                border-radius: 3px;
+            }
+            QCheckBox::indicator:hover {
+                border-color: #888;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #555;
+                border-color: #555;
+            }
+            QCheckBox::indicator:checked:hover {
+                background-color: #444;
+                border-color: #444;
+            }
+        """)
+        self.send_history_cb.setCursor(Qt.PointingHandCursor)
+        top_layout.addWidget(self.send_history_cb)
+
         top_layout.addStretch() # Push buttons to left
         
         layout.addLayout(top_layout)
@@ -889,9 +927,9 @@ class Right_AIChat_Panel(QWidget):
         if title_labels:
             title_labels[0].setText(lang_manager.get_text("AI Assistant"))
         
-        # Update input placeholder
-        if hasattr(self, 'input_text'):
-            self.input_text.setPlaceholderText(lang_manager.get_text("Ask AI assistant"))
+        # Update chat input placeholder
+        if hasattr(self, 'chat_line_edit'):
+            self.chat_line_edit.setPlaceholderText(lang_manager.get_text("Ask anything..."))
         
         # # Update send button
         # if hasattr(self, 'btn_send'):
@@ -952,6 +990,57 @@ class Right_AIChat_Panel(QWidget):
         return QIcon()
 
 
+    def update_models_list(self, new_models, preferred_model=None):
+        """Update the AI engine combobox with new model list from settings."""
+        self.models = list(new_models)
+        
+        self.AI_engine_box.blockSignals(True)
+        self.AI_engine_box.clear()
+        self.model_icons = []
+
+        for full_model_name in self.models:
+            if "/" in full_model_name:
+                AI_engine = full_model_name.split("/")[1]
+            else:
+                AI_engine = full_model_name
+
+            fname_lower = full_model_name.lower()
+            if any(k in fname_lower for k in ["openai", "gpt"]):
+                icon = QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-chatgpt-100-2.png"))
+            elif "openrouter" in fname_lower:
+                icon = QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-openrouter-100.png"))
+            elif "tngtech" in fname_lower:
+                icon = QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-tngtech-100.png"))
+            elif "deepseek" in fname_lower:
+                icon = QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-deepseek-100.png"))
+            elif "qwen" in fname_lower:
+                icon = QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-qwen-100.png"))
+            elif any(k in fname_lower for k in ["google", "gemma", "gemini"]):
+                icon = QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-Gemma-100.png"))
+            elif any(k in fname_lower for k in ["meta", "llama"]):
+                icon = QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-meta-100.png"))
+            elif "kwaipilot" in fname_lower:
+                icon = QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-meta-100.png"))
+            elif any(k in fname_lower for k in ["x-ai", "grok"]):
+                icon = QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-grok-100.png"))
+            elif any(k in fname_lower for k in ["mistral"]):
+                icon = QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-Mistral-100.svg"))
+            else:
+                icon = QIcon(utils.local_resource_path("SaMPH_Images/WIN11-Icons/icons8-Mistral-100.svg"))
+
+            self.AI_engine_box.addItem(icon, AI_engine)
+            self.model_icons.append(icon)
+
+        self.AI_engine_box.blockSignals(False)
+
+        if self.AI_engine_box.count() > 0:
+            saved_index = 0
+            if preferred_model and preferred_model in self.models:
+                saved_index = self.models.index(preferred_model)
+            self.AI_engine_box.setCurrentIndex(saved_index)
+            self.emit_model_changed(saved_index)
+
+
     def emit_model_changed(self, new_model_index):
         if new_model_index < 0:
             return
@@ -968,6 +1057,9 @@ class Right_AIChat_Panel(QWidget):
         else:
             model_icon = QIcon()
 
+        # Emit signal only - do NOT write to settings.ini here.
+        # QSettings.sync() rewrites the entire INI file, which would wipe out
+        # the api_key/base_url that on_provider_changed just saved.
         print("[INFO] Tool_Bar: model changed to", new_model)
         self.model_changed_signal.emit(new_model, model_icon)
     # ------------------------------------------------------------------
@@ -976,8 +1068,8 @@ class Right_AIChat_Panel(QWidget):
     # ------------------------------------------------------------------
     def load_AI_config(self, config_path):
         """
-        Load OpenRouter configuration from a JSON file.
-        Returns empty values if file is missing or invalid, instead of showing error boxes.
+        Load AI configuration from account.json.
+        Supports both single-provider dict and multi-provider list formats.
         
         Returns:
             tuple: (provider, base_url, api_key, models)
@@ -985,14 +1077,10 @@ class Right_AIChat_Panel(QWidget):
         import json
         from pathlib import Path
 
-        # Check if file exists
         if not Path(config_path).exists():
             print(f"[INFO] AI config file not found: {config_path}")
             return None, None, None, []
 
-        # -------------------------------
-        # Load JSON file
-        # -------------------------------
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
@@ -1000,13 +1088,17 @@ class Right_AIChat_Panel(QWidget):
             print(f"[ERROR] Failed to load account file: {e}")
             return None, None, None, []
 
-        # -------------------------------
+        # Handle list format (multi-provider)
+        if isinstance(config, list):
+            if not config or not isinstance(config[0], dict):
+                return None, None, None, []
+            config = config[0]  # Use first provider
+
         # Extract fields safely
-        # -------------------------------
-        AI_provider = config.get("Provider")
-        base_url = config.get("base_url")
-        api_key = config.get("API-Key")
-        models = config.get("models")
+        AI_provider = config.get("Provider") if isinstance(config, dict) else None
+        base_url = config.get("base_url") if isinstance(config, dict) else None
+        api_key = config.get("API-Key") if isinstance(config, dict) else None
+        models = config.get("models") if isinstance(config, dict) else []
 
         if not isinstance(models, (list, set)):
             models = []

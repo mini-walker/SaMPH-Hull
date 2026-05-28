@@ -291,7 +291,7 @@ class utils:
             folder_name (str): Folder name.
             chat_title (str): Chat title (will be sanitized).
             root_dir (str|Path, optional): Root directory to store chat folders.
-                If None, uses `.../usr/SaMPH/ChatHistory`.
+                If None, uses `.../usr/SaMPH-Hull/ChatHistory`.
 
         Returns:
             Path: Full path to chat JSON file.

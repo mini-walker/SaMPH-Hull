@@ -78,8 +78,9 @@ class SettingPage_Operations(QObject):
         #-----------------------------------------------------------------------
         # Connect settings page signals
         #-----------------------------------------------------------------------
-        # if hasattr(self.setting_page, 'apply_settings_signal'):
-        #     self.setting_page.apply_settings_signal.connect(self.apply_new_settings)
+        # Connect AI settings changed signal to update chat controller and right panel
+        if hasattr(self.setting_page, 'ai_settings_changed'):
+            self.setting_page.ai_settings_changed.connect(self.on_ai_settings_changed)
 
         # if hasattr(self.setting_page, 'language_changed'):
         #     self.setting_page.language_changed.connect(self.apply_language_change)
@@ -241,6 +242,7 @@ class SettingPage_Operations(QObject):
 
         # Update UI texts for all main components
         components = [
+            self.main_window,
             self.main_window.menu_bar,
             self.main_window.tool_bar,
             self.main_window.left_panel,
@@ -332,6 +334,15 @@ class SettingPage_Operations(QObject):
         print(f"[INFO] Search engine: {'Google' if use_google and not use_baidu else 'Baidu'}")
 
     #-----------------------------------------------------------------------
+    # Handle AI Settings Changed Signal
+    #-----------------------------------------------------------------------
+    def on_ai_settings_changed(self):
+        """Handle AI settings change from settings page."""
+        settings = QSettings(str(self.settings_file_path), QSettings.IniFormat)
+        self.apply_ai_settings(settings)
+        print("[INFO] AI settings changed signal received and applied")
+
+    #-----------------------------------------------------------------------
     # Apply AI Settings
     #-----------------------------------------------------------------------
     def apply_ai_settings(self, settings):
@@ -347,35 +358,21 @@ class SettingPage_Operations(QObject):
         # Update account.json with current settings before refreshing
         self.save_ai_settings_to_account_json(settings)
 
-        # Reload models in Right Panel (in case account.json changed or was added)
-        if hasattr(self.main_window, 'right_panel') and hasattr(self.main_window.right_panel, 'refresh_ai_models'):
-            self.main_window.right_panel.refresh_ai_models()
-            print("[INFO] AI models refreshed in right panel")
-            
-            # Update chat controller's model logo after refresh
-            if hasattr(self.main_window, 'chat_controller'):
-                current_model = settings.value("AI/model", "")
-                current_logo = self.main_window.right_panel.get_current_AI_model_logo()
-                if current_model and current_logo:
-                    self.main_window.chat_controller.model_logo = current_logo
-                    print(f"[INFO] Chat controller logo updated after refresh")
+        # Sync right panel with settings page's current provider's models
+        # (uses models_changed_signal instead of refresh_ai_models which always loads the first provider)
+        if hasattr(self.main_window, 'right_panel') and hasattr(self.main_window.right_panel, 'update_models_list'):
+            if hasattr(self.setting_page, '_current_models'):
+                current_models = self.setting_page._current_models()
+                selected_model = settings.value("AI/model", "")
+                self.main_window.right_panel.update_models_list(current_models, selected_model)
+                print("[INFO] AI models synced to right panel from current settings")
 
         # Update settings page controls if they exist
         if hasattr(self.setting_page, "controls") and "AI" in self.setting_page.controls:
             ai_ctrls = self.setting_page.controls["AI"]
 
-            # Update model (load from account.json)
-            if "model" in ai_ctrls and hasattr(self.setting_page, 'load_available_models'):
-                available_models = self.setting_page.load_available_models()
-                saved_model = settings.value("AI/model", "")
-                if saved_model and saved_model in available_models:
-                    ai_ctrls["model"].setCurrentText(saved_model)
-
-            # Update base URL
-            if "base_url" in ai_ctrls:
-                default_url = "https://openrouter.ai/api/v1/chat/completions"
-                saved_url = settings.value("AI/base_url", default_url)
-                ai_ctrls["base_url"].setText(saved_url)
+            # NOTE: base_url is NOT restored from settings.ini -
+            # on_provider_changed() handles it via the hardcoded URL map
 
             # Update system prompt
             if "system_prompt" in ai_ctrls:
@@ -403,79 +400,86 @@ class SettingPage_Operations(QObject):
     def save_ai_settings_to_account_json(self, settings):
 
         """
-        Save AI settings from settings.ini to account.json.
+        Save current AI settings (API Key and models) back to the matching provider in account.json.
+        Does NOT overwrite base_url - standard URLs are used from the hardcoded map.
         """
         
         try:
             usr_folder = utils.get_global_usr_dir()
             account_file = usr_folder / "Settings/account.json"
             
-            # Read existing account.json or create new dict
             if account_file.exists():
                 with open(account_file, 'r', encoding='utf-8') as f:
                     account_data = json.load(f)
             else:
-                account_data = {}
+                account_data = []
             
-            # Get current settings from settings.ini
+            if isinstance(account_data, dict):
+                account_data = [account_data]
+            elif not isinstance(account_data, list):
+                account_data = []
+            
             provider = settings.value("AI/provider", "")
-            base_url = settings.value("AI/base_url", "")
             api_key = settings.value("AI/api_key", "")
             
-            # Get models from settings page if available
+            # Map display name to account.json Provider name
+            provider_map = {
+                "OpenRouter (Recommended)": "OpenRouter",
+                "OpenAI (Official)": "OpenAI",
+                "Alibaba Qwen (DashScope)": "Qwen",
+                "DeepSeek (Official)": "DeepSeek",
+                "X.AI (Grok)": "X.AI",
+                "Groq (Meta Llama/Mixtral)": "Groq",
+                "Google Gemini (via OpenRouter)": "Gemini",
+                "SiliconFlow (硅基流动)": "SiliconFlow",
+                "Ollama (Localhost)": "Ollama",
+                "Arli": "Arli",
+            }
+            is_custom = provider.lower().strip() == "custom"
+            target_provider_name = provider_map.get(provider, provider)
+            
+            # Get models from settings page
             models = []
             if hasattr(self.setting_page, "controls") and "AI" in self.setting_page.controls:
                 model_combo = self.setting_page.controls["AI"].get("model")
                 if model_combo:
-                    # Get all items from the combobox
                     models = [model_combo.itemText(i) for i in range(model_combo.count())]
-                    # Filter out placeholder items
                     models = [m for m in models if m and m != "No models configured"]
             
-            # If no models from combo, try to preserve existing models from account.json
-            if not models and "models" in account_data:
-                models = account_data.get("models", [])
+            # Find matching provider by exact name match
+            target_lower = target_provider_name.lower().strip()
+            found = False
+            for item in account_data:
+                if not isinstance(item, dict):
+                    continue
+                item_provider = str(item.get("Provider") or item.get("provider") or "").lower().strip()
+                
+                # Match: same name, or one contains the other (case-insensitive)
+                if item_provider == target_lower or target_lower in item_provider or item_provider in target_lower:
+                    if api_key:
+                        item["API-Key"] = api_key
+                    if models:
+                        item["models"] = models
+                    found = True
+                    print(f"[INFO] Updated provider '{item.get('Provider')}' in account.json (API key + models)")
+                    break
             
-            # Update account_data (support both naming conventions)
-            # Map provider display name to internal name
-            provider_reverse_map = {
-                "OpenRouter (Recommended)": "openrouter",
-                "OpenAI (Official)": "openai",
-                "Alibaba Qwen (DashScope)": "qwen",
-                "DeepSeek (Official)": "deepseek",
-                "X.AI (Grok)": "xai",
-                "Groq (Meta Llama/Mixtral)": "groq",
-                "Google Gemini (via OpenRouter)": "gemini",
-                "SiliconFlow (硅基流动)": "siliconflow",
-                "Ollama (Localhost)": "ollama",
-                "Arli": "arli"
-            }
+            # If not found and not custom, append as new provider
+            if not found and api_key and not is_custom:
+                new_provider = {
+                    "Provider": target_provider_name,
+                    "base_url": "",
+                    "API-Key": api_key,
+                    "models": models if models else []
+                }
+                account_data.append(new_provider)
+                print(f"[INFO] Added new provider '{target_provider_name}' to account.json")
             
-            internal_provider = provider_reverse_map.get(provider, provider.lower() if provider else "")
-            
-            # Use original field naming convention
-            if internal_provider:
-                account_data["Provider"] = internal_provider.capitalize()
-            
-            if base_url:
-                account_data["base_url"] = base_url
-            
-            if api_key:
-                account_data["API-Key"] = api_key
-            
-            if models:
-                account_data["models"] = models
-            
-            # Write back to account.json
             account_file.parent.mkdir(parents=True, exist_ok=True)
-            
-            print(f"[DEBUG] Attempting to save account.json to: {account_file}")
-            print(f"[DEBUG] Account data to save: {json.dumps(account_data, ensure_ascii=False)}")
-            
             with open(account_file, 'w', encoding='utf-8') as f:
                 json.dump(account_data, f, indent=2, ensure_ascii=False)
             
-            print(f"[INFO] Successfully updated account.json at {account_file}")
+            print(f"[INFO] Successfully updated account.json")
             
         except Exception as e:
             error_msg = f"Failed to update account.json at {account_file}\nError: {e}"
@@ -483,7 +487,6 @@ class SettingPage_Operations(QObject):
             import traceback
             traceback.print_exc()
             
-            # Show error message box to user (helpful for EXE debugging)
             if hasattr(self, 'main_window'):
                 QMessageBox.critical(self.main_window, "Save Error", error_msg)
 

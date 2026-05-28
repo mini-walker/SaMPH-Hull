@@ -5,13 +5,14 @@
 <h1 align="center">SaMPH-Hull</h1>
 
 <p align="center">
-  <strong>Savitsky Method for Planing Hull Hydrodynamic Analysis</strong>
+  <strong>An Open-Source AI-Integrated GUI Tool for the Performance Evaluation of Planing Hull</strong>
 </p>
 
 <p align="center">
   <a href="#features">Features</a> •
   <a href="#installation">Installation</a> •
   <a href="#quick-start">Quick Start</a> •
+  <a href="#installation--usage-guide">Installation & Usage Guide</a> •
   <a href="#methodology">Methodology</a> •
   <a href="#screenshots">Screenshots</a> •
   <a href="#citation">Citation</a> •
@@ -29,10 +30,10 @@
 
 ## Overview
 
-**SaMPH-Hull** is a desktop application for the hydrodynamic performance analysis of high-speed planing hulls. It implements the well-established **Savitsky empirical method** to predict resistance, trim, sinkage, and wake characteristics of planing craft in calm water — all wrapped in a modern, user-friendly GUI.
+**SaMPH-Hull** is an open-source, Python-based desktop application for the hydrodynamic performance evaluation of high-speed planing hulls. It implements the well-established **Savitsky empirical method** to predict motion responses and resistance components over a wide range of forward speeds in calm water, with total computation time limited to only a few minutes. Additionally, SaMPH-Hull supports **automated reporting in PDF and Markdown formats** with an AI-powered assistant — all wrapped in a modern, user-friendly GUI.
 
 > **Why SaMPH-Hull?**  
-> CFD simulations take hours; SaMPH-Hull delivers validated results in **milliseconds**, making it ideal for preliminary design, parametric studies, and classroom teaching.
+> CFD simulations take hours on multi-core workstations; a full multi-speed SaMPH-Hull evaluation typically finishes in **under one minute** on a standard laptop, making it the ideal pre-screening tool for preliminary design, parametric studies, and classroom teaching.
 
 ---
 
@@ -55,13 +56,14 @@
 - **Discrete-speed mode** — analyse specific speed points
 - **Continuous-speed mode** — define a range with increment
 - **Excel import/export** (`openpyxl`) with formatted templates
-- **PDF report generation** (`reportlab`) with charts and tables
+- **PDF and Markdown report generation** (`reportlab`) with charts and tables
 - One-click copy/open of result file paths
 
 ### 🤖 AI Assistant
-- Built-in **AI chat panel** (supports OpenAI-compatible endpoints)
-- Automatic **result evaluation** — sends hull parameters and outputs to the LLM for design feedback
-- Chat history management with persistent storage
+- Built-in **AI chat panel** via a provider-agnostic OpenAI-compatible API — supports GPT, Gemini, Mistral, Qwen, and any locally hosted model
+- Automatic **result evaluation** — sends hull parameters and outputs to the LLM for trend analysis, anomaly detection, and engineering optimisation recommendations
+- **Automated PDF and Markdown report generation** from within the chat interface
+- Chat history management with persistent local storage
 - Markdown, LaTeX, and code-highlighted rendering in chat bubbles
 
 ### 🌐 Multilingual
@@ -81,7 +83,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/SaMPH-Hull.git
+git clone https://github.com/mini-walker/SaMPH-Hull.git
 cd SaMPH-Hull
 
 # Create a virtual environment (recommended)
@@ -143,6 +145,86 @@ Ready-to-use Excel templates are provided in the `Examples/` directory:
 | `input_example_continuous.xlsx` | Continuous-speed range template     |
 | `input_GPPH.xlsx`               | Generic Prismatic Planing Hull case |
 | `input_Southampton_Type_C.xlsx` | Southampton Type C hull case        |
+
+---
+
+## Installation & Usage Guide
+
+> 📄 This section provides a concise, self-contained one-page reference for installing and using **SaMPH-Hull**. It is intended to satisfy the reviewer's request for a standalone installation and usage manual.
+
+### Step 1 — Prerequisites
+
+| Requirement | Minimum Version | Notes |
+|---|---|---|
+| Python | 3.8 | 3.10+ recommended |
+| pip | bundled with Python | Used to install dependencies |
+| Git | any | Only required to clone from source |
+
+### Step 2 — Install
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/mini-walker/SaMPH-Hull.git
+cd SaMPH-Hull
+
+# 2. (Recommended) Create and activate a virtual environment
+python -m venv venv
+# Windows
+venv\Scripts\activate
+# macOS / Linux
+source venv/bin/activate
+
+# 3. Install all dependencies
+pip install -r requirements.txt
+```
+
+> **Windows users** who prefer a standalone executable can instead run `Generate_single_exe.bat` (or `Generate_onedir_exe.bat`) after installing dependencies. The compiled `.exe` will appear in the `dist/` folder and requires no Python installation to run.
+
+### Step 3 — Launch the Application
+
+```bash
+python src/Main.py
+```
+
+The SaMPH-Hull main window will open. On first launch the interface language is automatically selected based on the system locale (English or 中文). The language can be changed at any time from **Settings → Language**.
+
+### Step 4 — Run a Calculation
+
+1. On the **Home** page click **"New Input"**.
+2. On the **Input** page enter the hull parameters:
+
+   | Parameter | Symbol | Example |
+   |---|---|---|
+   | Hull length | *L* | 8.0 m |
+   | Beam | *B* | 1.6 m |
+   | Displacement mass | *W* | 3 017 kg |
+   | Deadrise angle | *β* | 20 ° |
+   | LCG from transom | *LCG* | 3.28 m |
+   | VCG from keel | *VCG* | 0.47 m |
+   | Draft | *T* | 0.40 m |
+   | Speed range | *V* | 5 – 16 m/s |
+
+   Alternatively, click **"Import Excel"** and open one of the ready-made templates from the `Examples/` folder.
+
+3. Click **"Perform Calculation"**. Results appear in the **Results** tab within seconds.
+
+### Step 5 — Explore Results & Export
+
+| Action | How to |
+|---|---|
+| View charts | Switch between sub-tabs: *Resistance*, *Trim*, *Sinkage*, *Wake* |
+| Export to Excel | Click **"Export Excel"** on the Results page |
+| Generate PDF report | Click **"Generate Report"** on the Results page |
+| AI design feedback | Open the **AI Assistant** panel and click **"Evaluate Results"** |
+
+### Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `ModuleNotFoundError` on launch | Missing dependency | Re-run `pip install -r requirements.txt` |
+| GUI does not open (Windows) | Missing Visual C++ runtime | Install the latest [Microsoft Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) |
+| Calculation fails / large errors at low speed | Speed below fully planing regime | Ensure beam Froude number C_v > 1.5; results for C_v < 1.5 should be interpreted with caution |
+| Trim angle out of range | Parameter combination outside Savitsky validity | Check deadrise (10°–25°) and trim (0.5°–15°) |
 
 ---
 
@@ -219,27 +301,30 @@ SaMPH-Hull/
 ### ✅ Valid Range
 
 - **Hull type**: Prismatic planing surfaces with flat transom
-- **Deadrise angle**: 10° – 30°
-- **Beam Froude number**: C_v > 1.0 (planing regime)
+- **Deadrise angle**: 10° – 25°
+- **Beam Froude number**: C_v > 1.5 (planing regime)
 - **Trim angle**: 0.5° – 15°
 
 ### ⚠️ Not Captured
 
-- Irregular hull geometry (variable deadrise, stepped hulls)
+- Stepped, warped-bottom, or variable-deadrise hull geometries
+- Pre-planing and hump-speed transition regime (C_v < 1.5) — use with caution
+- Porpoising (dynamic longitudinal stability) criterion — planned for a future release
 - Waves / seaway effects
 - Appendage drag (shafts, struts, rudders)
 - Propeller–hull interaction
-- Dynamic stability
 
 ---
 
 ## Future Roadmap
 
-- [ ] Integration of additional empirical methods (Blount & Fox, Zarnick)
-- [ ] Automated hull form optimisation module
+- [ ] **Porpoising stability criterion** — dynamic longitudinal stability boundary as a function of equilibrium trim angle and beam Froude number
+- [ ] **Stepped planing hull support** — semi-empirical methods for single- and two-stepped configurations
+- [ ] **Warped-bottom geometry support** — hulls with variable deadrise along the hull length
+- [ ] **Manoeuvring coupling** — use calm-water trim/sinkage outputs as inputs to 6-DOF manoeuvring models
+- [ ] **Multi-objective optimisation** — jointly optimise resistance, stability, seakeeping, and manoeuvring performance
 - [ ] Seaway / added-resistance module
 - [ ] Appendage drag library
-- [ ] 3D hull & wake visualisation
 - [ ] Systematic series database support
 
 ---
@@ -252,9 +337,17 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 ## Acknowledgements
 
-**Author**: Shanqin Jin  
-**Affiliation**: Memorial University of Newfoundland  
-**Contact**: sjin@mun.ca
+This study was supported by the **Key R&D Program of Jiangxi Province, China** (Grant No. 20243BBG71006).
+
+The authors thank Prof. Taunton (University of Southampton) and Prof. Judge (US Coast Guard Academy) for their generosity in sharing the model geometry and experimental datasets for the Southampton Series and Generic Prismatic Planing Hull, respectively.
+
+### Authors
+
+| Name | Role | Email |
+|---|---|---|
+| Shanqin Jin | Author | sjin@mun.ca |
+
+**Support e-mail**: sjin@mun.ca
 
 ---
 

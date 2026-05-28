@@ -28,12 +28,12 @@ from PySide6.QtWidgets import (
     QFormLayout, QGridLayout,                 # Additional layout managers for forms and grids
     QMessageBox            # Modal dialogs for feedback and errors
 )
-from PySide6.QtGui import QPixmap, QFont, QIcon         # Images, fonts, and icons used by the login UI
-from PySide6.QtCore import Qt, QSize, QSettings         # Core utilities such as alignment flags and persistent settings
+from PySide6.QtGui import QPixmap, QFont, QIcon   # Images, fonts, and icons used by the login UI
+from PySide6.QtCore import Qt, QSize, QSettings   # Core utilities such as alignment flags and persistent settings
 #-----------------------------------------------------------------------------------------
 
 
-#----------------------------------------------------------
+#-----------------------------------------------------------------------------------------
 # Main execution block
 if __name__ == '__main__':  # Ensure this code runs only when the file is executed directly
     
@@ -53,4 +53,6 @@ if __name__ == '__main__':  # Ensure this code runs only when the file is execut
     # Start the Qt event loop. The return code is propagated back to the OS so that
     # automation scripts can detect abnormal exits.
     sys.exit(app.exec())
-#----------------------------------------------------------
+    #-------------------------------------------------------------------------------------
+
+#-----------------------------------------------------------------------------------------

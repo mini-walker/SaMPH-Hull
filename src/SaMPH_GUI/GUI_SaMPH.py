@@ -230,97 +230,61 @@ class GUI_SaMPH_Application(QMainWindow):     # Define the login window class, i
             settings.remove("Advanced") # Clean up old group
         
         #---------------------------------------------------------------------------------
-        # 2. Get the AI engine list from usr/account.json file
+        # 2. Load provider/model definitions from account.json (multi-provider support)
         usr_dir = utils.get_global_usr_dir()
         account_file = usr_dir / "Settings/account.json"
         
-        # Use Right_AIChat_Panel's method to load config
-        default_provider, default_base_url, default_key, default_models = self.right_panel.load_AI_config(account_file)
-        
-        # Log what was loaded from account.json
-        if default_provider or default_base_url or default_key or default_models:
-            print("[INFO] Loading AI configuration from account.json:")
-            if default_provider:
-                print(f"  - Provider: {default_provider}")
-            if default_base_url:
-                print(f"  - Base URL: {default_base_url}")
-            if default_key:
-                print(f"  - API Key: {'*' * min(8, len(default_key))}")
-            if default_models:
-                print(f"  - Models: {len(default_models)} models loaded")
-        else:
-            print("[INFO] No valid AI configuration found in account.json, will use defaults")
+        providers = self.setting_page.load_all_AI_configs(account_file)
+        self.setting_page.update_provider_states(providers)
 
-        #---------------------------------------------------------------------------------
-        # 3. Set AI provider (if available from account.json)
-        selected_provider = None
-        
-        if default_provider:
-            default_provider_lower = default_provider.lower()
-            found_index = -1
+        def match_account_provider(provider_text):
+            provider_text = str(provider_text or "").lower().strip()
+            if not provider_text:
+                return None
+            for provider in providers:
+                provider_name = str(provider.get("Provider") or provider.get("provider") or "").lower().strip()
+                if provider_name and (provider_name in provider_text or provider_text in provider_name):
+                    return provider
+            return None
 
-            # Iterate through ComboBox options to find matching provider
-            if hasattr(self.setting_page, 'provider_combo'):
-                for i in range(self.setting_page.provider_combo.count()):
-                    item_lower = self.setting_page.provider_combo.itemText(i).lower()
-                    if default_provider_lower in item_lower:
-                        found_index = i
-                        break
+        selected_provider = ""
+        matched_provider = None
+        if providers:
+            saved_provider = settings.value("AI/provider", "")
+            matched_provider = match_account_provider(saved_provider)
+            provider_missing_or_invalid = not matched_provider
+            if provider_missing_or_invalid:
+                matched_provider = providers[0]
 
-                # Set the provider combo box index
-                if found_index != -1:
-                    self.setting_page.provider_combo.setCurrentIndex(found_index)
-                    selected_provider = self.setting_page.provider_combo.itemText(found_index)
-                    print(f"[INFO] Set provider to '{selected_provider}' from account.json")
-                else:
-                    # Provider value exists but doesn't match any option - use Custom
-                    custom_index = self.setting_page.provider_combo.findText("Custom")
-                    if custom_index != -1:
-                        self.setting_page.provider_combo.setCurrentIndex(custom_index)
-                        selected_provider = "Custom"
-                        print(f"[INFO] Provider '{default_provider}' not recognized, set to 'Custom'")
-        
-        # If no provider from account.json, check settings.ini or use default
-        if not selected_provider:
-            if settings.contains("AI/provider"):
-                selected_provider = settings.value("AI/provider")
-                print(f"[INFO] Using provider from settings.ini: {selected_provider}")
+            account_provider_name = matched_provider.get("Provider") or matched_provider.get("provider") or ""
+            found_index = self.setting_page._provider_combo_index_for_account_provider(account_provider_name)
+            if found_index != -1:
+                self.setting_page.provider_combo.setCurrentIndex(found_index)
+                selected_provider = self.setting_page.provider_combo.itemText(found_index)
+                print(f"[INFO] Set provider combo box to index {found_index} ({selected_provider})")
             else:
-                selected_provider = "OpenRouter (Recommended)"
-                print(f"[INFO] No provider configured, using default: {selected_provider}")
+                selected_provider = account_provider_name
+                print(f"[WARN] Provider '{account_provider_name}' has no matching settings item.")
 
-        #---------------------------------------------------------------------------------
-        # 4. Set each AI field independently - use account.json if available, otherwise use defaults
-        
-        # Provider
-        settings.setValue("AI/provider", selected_provider)
-        
-        # Base URL
-        if default_base_url:
-            settings.setValue("AI/base_url", default_base_url)
-            print(f"[INFO] Set base_url from account.json")
+            account_models = matched_provider.get("models", [])
+            saved_model = settings.value("AI/model", "")
+            selected_model = saved_model if saved_model in account_models else (account_models[0] if account_models else "")
+
+            if is_first_run or not settings.contains("AI/provider") or provider_missing_or_invalid:
+                print("[INFO] Initializing AI config from account.json...")
+                settings.setValue("AI/provider", selected_provider)
+            # NOTE: base_url is NOT saved from account.json - the hardcoded URL map
+            # in on_provider_changed() always provides the correct standard URL
+            if is_first_run or not settings.contains("AI/api_key") or provider_missing_or_invalid:
+                settings.setValue("AI/api_key", matched_provider.get("API-Key", ""))
+            if is_first_run or not settings.contains("AI/model") or saved_model not in account_models:
+                settings.setValue("AI/model", selected_model)
+
+            print("[INFO] Provider (GUI):", account_provider_name)
+            print("[INFO] Base URL (GUI):", matched_provider.get("base_url", ""))
+            print("[INFO] Models (GUI):", account_models)
         else:
-            check_and_set_default("AI/base_url", "https://openrouter.ai/api/v1/chat/completions")
-            if not settings.contains("AI/base_url"):
-                print(f"[INFO] No base_url in account.json, using default")
-        
-        # API Key
-        if default_key:
-            settings.setValue("AI/api_key", default_key)
-            print(f"[INFO] Set api_key from account.json")
-        else:
-            check_and_set_default("AI/api_key", "")
-            if not settings.contains("AI/api_key") or not settings.value("AI/api_key"):
-                print(f"[INFO] No api_key in account.json, using empty default")
-        
-        # Model
-        if default_models and len(default_models) > 0:
-            settings.setValue("AI/model", default_models[0])
-            print(f"[INFO] Set model to '{default_models[0]}' from account.json")
-        else:
-            check_and_set_default("AI/model", "openai/gpt-oss-120b")
-            if not settings.contains("AI/model"):
-                print(f"[INFO] No models in account.json, using default model")
+            print("[ERROR] (GUI) No valid AI configuration found in account.json.")
 
         # Set other AI defaults (system prompt, temperature)
         check_and_set_default("AI/system_prompt", "You are a helpful assistant.")
@@ -395,7 +359,7 @@ class GUI_SaMPH_Application(QMainWindow):     # Define the login window class, i
         
         # ============ Left Drag Handle ============
         self.left_drag_handle = QWidget()
-        self.left_drag_handle.setFixedWidth(2)  # Slightly thinner
+        self.left_drag_handle.setFixedWidth(6)  # Wider for easier grabbing
         self.left_drag_handle.setCursor(Qt.CursorShape.SizeHorCursor)
         # Transparent background, only cursor changes
         self.left_drag_handle.setStyleSheet("background-color: transparent;")
@@ -428,7 +392,7 @@ class GUI_SaMPH_Application(QMainWindow):     # Define the login window class, i
 
         # ============ Right Drag Handle ============
         self.right_drag_handle = QWidget()
-        self.right_drag_handle.setFixedWidth(2)  # Slightly thinner
+        self.right_drag_handle.setFixedWidth(6)  # Wider for easier grabbing
         self.right_drag_handle.setCursor(Qt.CursorShape.SizeHorCursor)
         # Transparent background, only cursor changes
         self.right_drag_handle.setStyleSheet("background-color: transparent;")
@@ -520,8 +484,8 @@ class GUI_SaMPH_Application(QMainWindow):     # Define the login window class, i
 
 
 
-        # Model change signal for both chat controller and worker
-        self.right_panel.model_changed_signal.connect(self.operation_chat.worker.update_config)
+        # Model change signal for chat controller and worker
+        # (update_model_for_chat_controller reads api_key/base_url from settings.ini)
         self.right_panel.model_changed_signal.connect(self.operation_chat.update_model_for_chat_controller)
 
         # Signal from history panel to open chat file
@@ -546,6 +510,12 @@ class GUI_SaMPH_Application(QMainWindow):     # Define the login window class, i
         #-----------------------------------------------------------------------
         if hasattr(self.setting_page, 'apply_settings_signal'):
             self.setting_page.apply_settings_signal.connect(self.operations_setting_page.apply_new_settings)
+
+        # Propagate model changes from settings to AI chat panel
+        try:
+            self.setting_page.models_changed_signal.connect(self.right_panel.update_models_list)
+        except Exception:
+            pass
 
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -580,6 +550,13 @@ class GUI_SaMPH_Application(QMainWindow):     # Define the login window class, i
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     # Helper function to update input container after sidebar resize
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    def update_ui_texts(self, lang_manager):
+        """Update main window title when language changes."""
+        if lang_manager:
+            self.setWindowTitle(lang_manager.get_text("SaMPH-Hull"))
+
+    #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
     def update_input_after_drag(self):
         """
         在拖动防抖timer触发后更新输入框位置

@@ -362,7 +362,7 @@ class ChatHistoryPanel(QWidget):
     new_chat_request = Signal()
     panel_closed = Signal()
     
-    def __init__(self, parent=None, storage_root: str = "usr/SaMPH/ChatHistory"):
+    def __init__(self, parent=None, storage_root: str = None):
 
         super().__init__(parent)
         
@@ -377,8 +377,14 @@ class ChatHistoryPanel(QWidget):
         self.folder_counter = 0
         self.active_folder = None
         
-        # Storage
-        self.storage_root = Path(storage_root)
+        # Storage: prefer explicit storage_root, otherwise use global usr dir under SaMPH-Hull
+        if storage_root:
+            self.storage_root = Path(storage_root)
+        else:
+            # Use utils.get_global_usr_dir() to ensure data is stored under usr/SaMPH-Hull
+            usr_dir = utils.get_global_usr_dir()
+            self.storage_root = usr_dir / "ChatHistory"
+
         self.storage_root.mkdir(parents=True, exist_ok=True)
         
         # *** Key: Set to float above parent widget ***

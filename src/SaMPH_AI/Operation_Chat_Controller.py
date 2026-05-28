@@ -141,7 +141,7 @@ class AIChatWorker(QThread):
                 
             msgs, bubble = task
             try:
-                # print(f"[INFO] Worker sending request to: {self.base_url} | Model: {self.model}")
+                print(f"[INFO] Worker sending request | model: {self.model} | base_url: {self.base_url} | api_key: {self.api_key[:8]}...")
                 
                 # Send request (using dynamic Base URL)
                 resp = requests.post(
@@ -178,17 +178,15 @@ class AIChatWorker(QThread):
                     # Send result (including rendered HTML)
                     # ------------------------------------------------------
                     self.finished.emit(
-                        {"html": html_output, "raw_text": content, "images": None}, 
+                        {"html": html_output, "raw_text": content, "images": None, "model_used": self.model}, 
                         bubble
                     )
                     
             except Exception as e:
                 print(f"[Error] AI Worker Failed: {e}")
                 if self._running:
-                    self.finished.emit(
-                        {"html": f"<p style='color:red'>Error: {e}</p>", "raw_text": str(e), "images": None}, 
-                        bubble
-                    )
+                    self.finished.emit({"html": f"<p style='color:red'>Error: {e}</p>", "raw_text": str(e), "images": None, "model_used": self.model},
+                        bubble)
             finally:
                 self.queue.task_done()
 
@@ -245,9 +243,13 @@ class Operation_Chat_Controller:
         self.model_logo      = main_window.right_panel.get_current_AI_model_logo()                                              
 
 
-        # Get the API Key and base URL from settings
-        self.api_key  = self.setting_window.get_api_key()
-        self.base_url = self.setting_window.get_base_url()  
+        # Get the API Key and base URL from settings.ini (single source of truth)
+        from PySide6.QtCore import QSettings
+        usr_dir = utils.get_global_usr_dir()
+        settings_file = usr_dir / "Settings/settings.ini"
+        settings = QSettings(str(settings_file), QSettings.IniFormat)
+        self.api_key  = settings.value("AI/api_key", "", type=str)
+        self.base_url = settings.value("AI/base_url", "", type=str)  
 
 
         self.current_chat_file = None
@@ -257,7 +259,7 @@ class Operation_Chat_Controller:
 
         # 2. Initialize Worker
         print(f"[INFO] Initializing AIChatWorker with model: {self.model}, base_url: {self.base_url}")
-        print(f"[INFO] Using API Key: {self.api_key}")
+        print(f"[INFO] Using API Key from settings.ini: {self.api_key}")
         self.worker = AIChatWorker(self.api_key, self.model, self.base_url)
 
         # 3. Connect Signals
@@ -281,14 +283,18 @@ class Operation_Chat_Controller:
         self.model = new_model
         self.model_logo = new_model_icon
 
-        # Also update worker's model
-        # Get the new API Key and base URL from settings
-        # If the worker exists, update its config
-        new_key = self.setting_window.get_api_key()
-        new_url = self.setting_window.get_base_url()
+        # Read api_key and base_url from the setting page UI controls (always up-to-date)
+        # NOT from settings.ini, because QSettings instances cache and overwrite each other.
+        if hasattr(self.setting_window, 'controls') and "AI" in self.setting_window.controls:
+            ai_ctrls = self.setting_window.controls["AI"]
+            new_key = ai_ctrls["api_key"].text().strip() if "api_key" in ai_ctrls else ""
+            new_url = ai_ctrls["base_url"].text().strip() if "base_url" in ai_ctrls else ""
+        else:
+            new_key = ""
+            new_url = ""
 
         print(f"[INFO] Updating AIChatWorker with model: {self.model}, new_url: {new_url}")
-        print(f"[INFO] Updating API Key: {new_key}")
+        print(f"[INFO] Updating API Key from setting page controls: {new_key[:8]}...")
 
         if self.worker:
             self.worker.update_config(new_key, new_url, new_model)
@@ -406,6 +412,9 @@ class Operation_Chat_Controller:
         :param images: Image list (Base64 string list or file path list)
         :param show_user_message: If False, hides the user message bubble from the chat UI (but still sends to AI)
         """
+        # Log current configuration to debug model switching
+        print(f"[INFO] send_message | controller.model: {self.model} | worker.model: {self.worker.model if self.worker else 'N/A'} | worker.base_url: {self.worker.base_url[:50] if self.worker else 'N/A'}... | worker.api_key: {self.worker.api_key[:8] if self.worker and self.worker.api_key else 'N/A'}...")
+
         # 1. Modified validation: return only if no text AND no images
         # This allows users to send images without text
         if not text.strip() and not images: 
@@ -473,24 +482,39 @@ class Operation_Chat_Controller:
         """
         # 1. Persist and save record
         raw_text = reply.get("raw_text", "")
-        
+        model_used = reply.get("model_used", self.model)
+
         # [Key Fix] Remove <think> tags before saving to avoid persisting thinking content
         clean_text = re.sub(r'<think>.*?</think>\s*', '', raw_text, flags=re.DOTALL)
-        
-        self.append_record("assistant", 
-                            {"text": clean_text, "images": None}, 
-                            model_name=self.model)
+
+        self.append_record("assistant",
+                            {"text": clean_text, "images": None},
+                            model_name=model_used)
 
         # 2. Defensive programming: create new bubble if missing
+        w = max(100, self.scroll_area.viewport().width() - 40)
         if ai_bubble is None:
-            w = max(100, self.scroll_area.viewport().width() - 40)
+            # create fresh bubble with correct model name
             ai_bubble = BubbleMessage(
                 text="Thinking...", is_user=False,
-                ai_logo=self.model_logo, 
-                model_name=self.model,
+                ai_logo=self.model_logo,
+                model_name=model_used,
                 parent_width=w
             )
             self.result_display.insertWidget(self.result_display.count()-1, ai_bubble)
+        else:
+            # Update existing bubble's model name if needed
+            if getattr(ai_bubble, "model_name", None) != model_used:
+                # replace bubble to reflect correct model name
+                self.result_display.removeWidget(ai_bubble)
+                ai_bubble.deleteLater()
+                ai_bubble = BubbleMessage(
+                    text="Thinking...", is_user=False,
+                    ai_logo=self.model_logo,
+                    model_name=model_used,
+                    parent_width=w
+                )
+                self.result_display.insertWidget(self.result_display.count()-1, ai_bubble)
 
         # 3. Connect scroll signal
         try:
@@ -501,9 +525,8 @@ class Operation_Chat_Controller:
         except Exception:
             pass
 
-        # 4. [Core Fix] Set content display
+        # 4. Set content display
         html_content = reply.get("html")
-        
         if html_content:
             # If Worker already rendered HTML (old mode), set directly
             ai_bubble.set_pre_rendered_content(html_content)
@@ -615,41 +638,52 @@ class Operation_Chat_Controller:
             {"role": "system", "content": final_system_message}
         ]
         
-        for x in self.chat_history:
-            role = x["role"]
-            text = x.get("text", "")
-            images = x.get("images", [])
+        # Check if "Send History" toggle button is enabled
+        send_history = False
+        if hasattr(self.chat_window, 'send_history_cb'):
+            send_history = self.chat_window.send_history_cb.isChecked()
 
-            # --- Case A: Pure text ---
-            if not images:
-                msgs.append({"role": role, "content": text})
-            
-            # --- Case B: Contains images (Vision Request) ---
-            else:
-                content_list = []
-                
-                # 1. Add text (if not empty)
-                if text and str(text).strip():
-                    content_list.append({"type": "text", "text": str(text)})
-                
-                # 2. Process and add images
-                for img in images:
-                    # Use helper function to get correct format
-                    data_uri = self.get_image_data_uri(img)
-                    
-                    if data_uri:
-                        content_list.append({
-                            "type": "image_url",
-                            "image_url": {
-                                "url": data_uri
-                            }
-                        })
-                    else:
-                        print(f"[WARN] Skipping invalid image source in history.")
+        if send_history:
+            # Send full conversation history
+            for x in self.chat_history:
+                role = x["role"]
+                text = x.get("text", "")
+                images = x.get("images", [])
 
-                # Only add message when content_list not empty, prevent errors from sending empty content
-                if content_list:
-                    msgs.append({"role": role, "content": content_list})
+                if not images:
+                    msgs.append({"role": role, "content": text})
+                else:
+                    content_list = []
+                    if text and str(text).strip():
+                        content_list.append({"type": "text", "text": str(text)})
+                    for img in images:
+                        data_uri = self.get_image_data_uri(img)
+                        if data_uri:
+                            content_list.append({"type": "image_url", "image_url": {"url": data_uri}})
+                    if content_list:
+                        msgs.append({"role": role, "content": content_list})
+            print(f"[INFO] history_to_messages: sending {len(msgs)} messages (1 system + {len(self.chat_history)} history) to model '{self.model}'")
+        else:
+            # Only send the current user message (no history)
+            if self.chat_history:
+                last = self.chat_history[-1]
+                role = last["role"]
+                text = last.get("text", "")
+                images = last.get("images", [])
+
+                if not images:
+                    msgs.append({"role": role, "content": text})
+                else:
+                    content_list = []
+                    if text and str(text).strip():
+                        content_list.append({"type": "text", "text": str(text)})
+                    for img in images:
+                        data_uri = self.get_image_data_uri(img)
+                        if data_uri:
+                            content_list.append({"type": "image_url", "image_url": {"url": data_uri}})
+                    if content_list:
+                        msgs.append({"role": role, "content": content_list})
+            print(f"[INFO] history_to_messages: sending {len(msgs)} messages (no history) to model '{self.model}'")
                 
         return msgs
     
