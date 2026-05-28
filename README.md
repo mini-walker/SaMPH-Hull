@@ -336,9 +336,6 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 ---
 
 ## Acknowledgements
-
-This study was supported by the **Key R&D Program of Jiangxi Province, China** (Grant No. 20243BBG71006).
-
 The authors thank Prof. Taunton (University of Southampton) and Prof. Judge (US Coast Guard Academy) for their generosity in sharing the model geometry and experimental datasets for the Southampton Series and Generic Prismatic Planing Hull, respectively.
 
 ### Authors
