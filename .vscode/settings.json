@@ -1,5 +1,0 @@
-{
-    "agCockpit.telemetryEnabled": true,
-    "workbench.experimental.cloudChanges.partialMatches.enabled": false,
-    "typescript.disableAutomaticTypeAcquisition": false
-}
