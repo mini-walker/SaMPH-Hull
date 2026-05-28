@@ -2,7 +2,7 @@
   {
     "Provider": "deepseek",
     "base_url": "https://api.deepseek.com/chat/completions",
-    "API-Key": "",
+    "API-Key": "sk-acbc9bf9e04049f7a0c98b75ad72bd31",
     "models": [
       "deepseek-v4-flash",
       "deepseek-v4-pro"
@@ -11,7 +11,7 @@
   {
     "Provider": "Groq",
     "base_url": "https://api.groq.com/openai/v1/chat/completions",
-    "API-Key": "",
+    "API-Key": "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",
     "models": [
       "qwen/qwen3-32b",
       "openai/gpt-oss-120b",
@@ -23,7 +23,7 @@
   {
     "Provider": "Custom",
     "base_url": "https://api.llm7.io/v1/chat/completions",
-    "API-Key": "",
+    "API-Key": "i5zys3jWNpSm+8nj+2EsRColdAbaIE4Lh3xlhMls31Aznx15h/Gcu2/W90gKkV432LULiE7MWIKqDP0pHKrmv3Uk9QFeMq5PbwFnzCWBsWtPxO6+tI54Z4DNszCfIi8NmEw=",
     "models": [
       "default",
       "fast",
